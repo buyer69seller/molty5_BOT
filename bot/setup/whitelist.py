@@ -76,6 +76,6 @@ async def ensure_whitelist(api: MoltyAPI, owner_eoa: str, agent_eoa: str) -> boo
     else:
         log.info(
             "Default mode: Please approve whitelist manually at "
-            "https://www.moltyroyale.com → My Agent page"
+            "https://www.clawroyale.ai/agent-wallet"
         )
         return False
