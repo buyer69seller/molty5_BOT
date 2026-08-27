@@ -68,6 +68,6 @@ async def _recover_wallet_address(owner_eoa: str, creds: dict) -> str:
 
     log.warning(
         "Wallet exists but address could not be recovered. "
-        "Check My Agent page at https://www.moltyroyale.com"
+        "Check My Agent page at https://www.clawroyale.ai/agent-wallet"
     )
     return ""
