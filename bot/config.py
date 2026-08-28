@@ -8,6 +8,11 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+AGENT_NAME = "buy6_9sell"
+BASE_API_URL = "https://cdn.clawroyale.ai/api"
+WS_JOIN_URL = "wss://cdn.clawroyale.ai/ws/join"
+API_KEY = "mr_live_5uFKB4CBSSaWNpbxpWaiyOteqg3JRhy2"
+
 # ── Skill / API version ──────────────────────────────────────────────
 SKILL_VERSION = "1.15.0"
 
