@@ -23,204 +23,177 @@ from bot.utils.logger import get_logger
 log = get_logger(__name__)
 
 
-def _is_interactive() -> bool:
-    """Check if stdin is a TTY (terminal). False on Railway/Docker."""
-    return sys.stdin.isatty()
+import asyncio
+import json
+import math
+import requests
+import websockets
+
+# Konfigurasi Endpoint
+AGENT_NAME = "buy6_9sell"
+BASE_API_URL = "https://cdn.clawroyale.ai/api"
+WS_JOIN_URL = "wss://cdn.clawroyale.ai/ws/join"
+API_KEY = "mr_live_5uFKB4CBSSaWNpbxpWaiyOteqg3JRhy2"
+
+# Parameter AI & Rejoin
+LOW_HP_THRESHOLD = 0.4  # Pemicu Heal jika HP < 40%
+RECONNECT_DELAY = 3     # Waktu tunggu sebelum auto-rejoin (detik)
 
 
-def _ask_or_env(prompt: str, env_value: str, default: str = "") -> str:
-    """Read from env var first, then ask interactively, then fall back to default."""
-    if env_value:
-        return env_value
-    if _is_interactive():
-        val = input(prompt).strip()
-        if val:
-            return val
-    if default:
-        log.info("Using default: %s", default)
-    return default
+def get_distance(pos1, pos2):
+    """Menghitung jarak Euclidean antara dua titik koordinat."""
+    dx = pos1.get("x", 0) - pos2.get("x", 0)
+    dy = pos1.get("y", 0) - pos2.get("y", 0)
+    return math.hypot(dx, dy)
 
 
-def _restore_from_env() -> dict | None:
+def calculate_next_action(data):
     """
-    Check if we have existing credentials in env vars (Railway persistence).
-    If so, restore them to dev-agent/ and return creds dict.
-    This prevents generating new wallets on every container restart.
+    AI Logic dengan urutan prioritas:
+    1. Keluar dari Death Zone
+    2. Heal jika HP Rendah
+    3. Serang Monster Terdekat
     """
-    api_key = os.getenv("API_KEY", "")
-    agent_pk = os.getenv("AGENT_PRIVATE_KEY", "")
-    agent_addr = os.getenv("AGENT_WALLET_ADDRESS", "")
-    owner_pk = os.getenv("OWNER_PRIVATE_KEY", "")
-    owner_addr = os.getenv("OWNER_EOA", "")
-    agent_name = os.getenv("AGENT_NAME", "")
+    player = data.get("player", data.get("self", {}))
+    position = player.get("position", {"x": 0, "y": 0})
+    hp = player.get("hp", 100)
+    max_hp = player.get("maxHp", 100)
 
-    if not api_key or not agent_pk:
-        return None  # No env credentials — truly first run
+    # -------------------------------------------------------------
+    # PRIORITAS 1: Keluar dari Death Zone (Safe Zone Check)
+    # -------------------------------------------------------------
+    safe_zone = data.get("safeZone", data.get("zone", {}))
+    if safe_zone:
+        center = safe_zone.get("center", {"x": 0, "y": 0})
+        radius = safe_zone.get("radius", 1000)
+        dist_to_center = get_distance(position, center)
 
-    log.info("♻️ Restoring credentials from Railway Variables (env vars)...")
+        # Jika berada di dekat atau di luar batas lingkaran safe zone
+        if dist_to_center > (radius * 0.8):
+            return {
+                "type": "action",
+                "action": "move",
+                "target": center
+            }
 
-    # Restore wallet files
-    if agent_pk and agent_addr:
-        save_agent_wallet(agent_addr, agent_pk)
-        log.info("  Restored Agent wallet: %s", agent_addr[:12] + "...")
-    if owner_pk and owner_addr:
-        save_owner_wallet(owner_addr, owner_pk)
-        log.info("  Restored Owner wallet: %s", owner_addr[:12] + "...")
+    # -------------------------------------------------------------
+    # PRIORITAS 2: Heal jika HP Rendah
+    # -------------------------------------------------------------
+    if (hp / max_hp) < LOW_HP_THRESHOLD:
+        skills = player.get("skills", [])
+        # Opsi A: Gunakan skill Heal jika tersedia
+        if "heal" in skills:
+            return {
+                "type": "action",
+                "action": "use_skill",
+                "skill": "heal"
+            }
+        
+        # Opsi B: Bergerak menuju item Heal/Medkit terdekat jika ada di map
+        heal_items = data.get("healItems", [])
+        if heal_items:
+            nearest_heal = min(heal_items, key=lambda h: get_distance(position, h.get("position", {})))
+            return {
+                "type": "action",
+                "action": "move",
+                "target": nearest_heal.get("position")
+            }
 
-    # Restore credentials file
-    creds = {
-        "api_key": api_key,
-        "agent_name": agent_name,
-        "agent_wallet_address": agent_addr,
-        "owner_eoa": owner_addr,
+    # -------------------------------------------------------------
+    # PRIORITAS 3: Serang Monster Terdekat
+    # -------------------------------------------------------------
+    monsters = data.get("monsters", data.get("entities", []))
+    if monsters:
+        nearest_monster = min(monsters, key=lambda m: get_distance(position, m.get("position", {})))
+        monster_pos = nearest_monster.get("position", {})
+        dist_to_monster = get_distance(position, monster_pos)
+        attack_range = player.get("attackRange", 50)
+
+        # Serang jika dalam jangkauan, atau mendekat jika di luar jangkauan
+        if dist_to_monster <= attack_range:
+            return {
+                "type": "action",
+                "action": "attack",
+                "targetId": nearest_monster.get("id")
+            }
+        else:
+            return {
+                "type": "action",
+                "action": "move",
+                "target": monster_pos
+            }
+
+    # Gerakan default jika tidak ada ancaman/monster: bergerak mendekati safe zone center
+    return {
+        "type": "action",
+        "action": "move",
+        "target": safe_zone.get("center", {"x": 0, "y": 0}) if safe_zone else {"x": 0, "y": 0}
     }
-    save_credentials(creds)
-
-    # Restore intake file
-    intake = {
-        "agent_name": agent_name,
-        "advanced_mode": ADVANCED_MODE,
-        "owner_eoa": owner_addr,
-        "agent_wallet_generated": True,
-        "owner_wallet_generated": bool(owner_pk),
-    }
-    save_owner_intake(intake)
-
-    log.info("✅ Credentials restored from env vars — skipping wallet generation")
-    return creds
 
 
-async def run_first_run_intake() -> dict:
-    """
-    First-Run Intake Flow (setup.md):
-    1. Check if env vars have existing credentials (Railway restart)
-    2. Get agent name (env → input → default)
-    3. Auto-generate Agent EOA
-    4. Auto-generate Owner EOA (advanced mode) or read from env/input
-    5. POST /accounts → save api_key
-    6. Persist credentials + intake
-    Returns credentials dict.
-    """
-    # Step 0: Check if this is a Railway restart with existing env credentials
-    restored = _restore_from_env()
-    if restored:
-        return restored
-
-    log.info("═══ FIRST-RUN INTAKE ═══")
-    if not _is_interactive():
-        log.info("Non-interactive mode (Railway/Docker detected)")
-
-    # Step 1: Agent name
-    agent_name = _ask_or_env(
-        "Enter agent name (max 50 chars): ",
-        AGENT_NAME,
-        "MoltyAgent",
-    )
-    if len(agent_name) > 50:
-        agent_name = agent_name[:50]
-
-    # Step 2: Generate Agent EOA (never ask the owner — setup.md)
-    log.info("Generating Agent EOA...")
-    agent_address, agent_pk = generate_agent_wallet()
-    save_agent_wallet(agent_address, agent_pk)
-    update_env_file("AGENT_WALLET_ADDRESS", agent_address)
-    update_env_file("AGENT_PRIVATE_KEY", agent_pk)
-
-    # Step 3: Owner EOA
-    owner_address = ""
-    owner_pk = ""
-    if ADVANCED_MODE:
-        log.info("Advanced mode: Generating Owner EOA...")
-        owner_address, owner_pk = generate_owner_wallet()
-        save_owner_wallet(owner_address, owner_pk)
-        update_env_file("OWNER_EOA", owner_address)
-        update_env_file("OWNER_PRIVATE_KEY", owner_pk)
-        log.info(
-            "Owner EOA generated: %s\n"
-            "  → Private key stored at: dev-agent/owner-wallet.json\n"
-            "  → You can view/download this file anytime\n"
-            "  → To import into MetaMask: Settings → Import Account → paste private key",
-            owner_address,
-        )
-    else:
-        owner_address = _ask_or_env(
-            "Enter your Owner EOA address (0x...): ",
-            OWNER_EOA,
-            "",
-        )
-        if not owner_address or not owner_address.startswith("0x") or len(owner_address) != 42:
-            log.error(
-                "Owner EOA address required but not provided or invalid. "
-                "Set OWNER_EOA env var (0x + 40 hex chars) or use ADVANCED_MODE=true."
-            )
-            raise ValueError("Missing or invalid Owner EOA address")
-        update_env_file("OWNER_EOA", owner_address)
-
-    # Step 4: Create account via API
-    log.info("Creating account via POST /accounts...")
-    api = MoltyAPI()
+async def play_claw_royale():
     try:
-        result = await api.create_account(agent_name, agent_address)
-    except APIError as e:
-        if e.code == "CONFLICT":
-            log.warning("Wallet already registered. Loading existing credentials.")
-            return load_credentials() or {}
-        raise
-    finally:
-        await api.close()
+        response = requests.get(f"{BASE_API_URL}/version", timeout=5)
+        version_data = response.json()
+        current_version = version_data.get("version", "1.15.0")
+    except Exception as e:
+        print(f"Gagal mengambil versi: {e}")
+        return
 
-    api_key = result.get("apiKey", "")
-    account_id = result.get("accountId", "")
-    public_id = result.get("publicId", "")
-
-    if not api_key:
-        raise RuntimeError("No apiKey returned from POST /accounts!")
-
-    log.info("✅ Account created! apiKey=%s... accountId=%s", api_key[:15], account_id[:8])
-
-    # Step 5: Persist
-    creds = {
-        "api_key": api_key,
-        "agent_name": agent_name,
-        "account_id": account_id,
-        "public_id": public_id,
-        "agent_wallet_address": agent_address,
-        "owner_eoa": owner_address,
+    headers = {
+        "X-Version": current_version,
+        "X-API-Key": API_KEY
     }
-    save_credentials(creds)
-    update_env_file("API_KEY", api_key)
-    update_env_file("AGENT_NAME", agent_name)
 
-    intake = {
-        "agent_name": agent_name,
-        "advanced_mode": ADVANCED_MODE,
-        "owner_eoa": owner_address,
-        "agent_wallet_generated": True,
-        "owner_wallet_generated": ADVANCED_MODE,
-    }
-    save_owner_intake(intake)
+    print(f"Menghubungkan ke {WS_JOIN_URL} dengan versi {current_version}...")
 
-    # Step 6: Auto-sync to Railway Variables (if on Railway)
-    from bot.utils.railway_sync import is_railway, sync_all_to_railway
-    if is_railway():
-        log.info("Detected Railway — syncing all variables in one batch...")
-        await sync_all_to_railway(creds, agent_pk, owner_pk)
+    async with websockets.connect(WS_JOIN_URL, additional_headers=headers) as ws:
+        welcome_frame = await ws.recv()
+        print(f"Welcome Frame: {welcome_frame}")
 
-    return creds
+        hello_payload = {
+            "type": "hello",
+            "entryType": "free"
+        }
+        await ws.send(json.dumps(hello_payload))
+        print("Hello payload terkirim. Menunggu event permainan...")
+
+        async for message in ws:
+            event = json.loads(message)
+            event_type = event.get("type")
+
+            # Cek jika agen mati atau game selesai
+            if event_type == "agent_died":
+                meta = event.get("meta", {})
+                if meta.get("youDied") is True:
+                    print("Agen mati! Menyiapkan Auto Rejoin...")
+                    break
+            elif event_type == "game_ended":
+                print("Permainan selesai! Menyiapkan Auto Rejoin...")
+                break
+
+            # Eksekusi aksi saat menerima kabar agent_view / game_state
+            elif event_type in ["agent_view", "game_state"]:
+                view_data = event.get("data", event)
+                action_payload = calculate_next_action(view_data)
+                
+                if action_payload:
+                    await ws.send(json.dumps(action_payload))
 
 
-async def ensure_account_ready() -> dict:
-    """
-    Ensure account exists. Run first-run intake if needed.
-    Returns credentials dict with api_key.
-    """
-    if is_first_run():
-        return await run_first_run_intake()
+async def main():
+    """Loop Utama dengan sistem Auto Rejoin."""
+    while True:
+        try:
+            await play_claw_royale()
+        except websockets.exceptions.ConnectionClosed as e:
+            print(f"Koneksi terputus: {e}")
+        except Exception as e:
+            print(f"Terjadi kesalahan: {e}")
 
-    creds = load_credentials()
-    if not creds or not creds.get("api_key"):
-        log.warning("Credentials file exists but no api_key. Re-running intake.")
-        return await run_first_run_intake()
+        print(f"Rejoining dalam {RECONNECT_DELAY} detik...\n")
+        await asyncio.sleep(RECONNECT_DELAY)
 
-    log.info("Returning run: account=%s", creds.get("agent_name", "unknown"))
-    return creds
+
+if __name__ == "__main__":
+    asyncio.run(main())
