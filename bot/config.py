@@ -9,27 +9,11 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ── Skill / API version ──────────────────────────────────────────────
-SKILL_VERSION = "1.5.2"
+SKILL_VERSION = "1.15.0"
 
 # ── URLs ──────────────────────────────────────────────────────────────
 API_BASE = "https://cdn.clawroyale.ai/api"
 WS_URL = "wss://cdn.clawroyale.ai/ws/join"
-
-# ── Chain config (CROSS Mainnet) ──────────────────────────────────────
-CROSS_CHAIN_ID = 612055
-CROSS_RPC = "https://mainnet.crosstoken.io:22001"
-
-# ── Contract addresses ────────────────────────────────────────────────
-IDENTITY_REGISTRY = "0x8004A169FB4a3325136EB29fA0ceB6D2e539a432"
-WALLET_FACTORY = "0x378De49F47817D3dF10393851A587e5C2C58EF7C"
-WALLET_FACTORY_LEGACY = "0x0713665E4D19fD16e1F09AD77526CC343c6F0223"
-MOLTZ_TOKEN = "0xdb99a97d607c5c5831263707E7b746312406ba7E"
-ARENA_PAID = "0x8f705417C2a11446e93f94cbe84F476572EE90Ed"
-ARENA_FREE = "0xAbC98bBe54e5bc495D97E6A9c51eEf14fd34e77D"
-REWARD_VAULT = "0x046a1C632f7e21C215CaF11e1176861567FcB8EE"
-FORGE_ROUTER = "0x7aF414e4d373bb332f47769c8d28A446A0C1a1E8"
-WCROSS = "0xDdF8AaA3927b8Fd5684dc2edcc7287EcB0A2122d"
-REPUTATION_REGISTRY = "0x8004BAa17C55a88189AE136b182e5fdA19dE9b63"
 
 # ── Economy constants (from economy.md) ───────────────────────────────
 PAID_ENTRY_FEE_MOLTZ = 500
